@@ -59,38 +59,42 @@ def median_kernel(filter_width: int):
 
         tl.store(y_ptr + offsets, MIDDLE_ROW_HERE, mask=mask)  # noqa: F821
 
+    # Wrap kernel to get modifiable kernel source
     kernel = triton.JITFunction(kernel.fn)
-    kernel.src = kernel.src.replace(
-        "    LOAD_ALL_ROWS_HERE",
-        "\n".join(
-            [
-                f"    row{i} = tl.load(x_ptr + offsets + {i}, mask=mask)"
-                for i in range(filter_width)
-            ]
-        ),
+
+    # Apply all replacements in a single step
+    src = kernel.src
+
+    load_all_rows = "\n".join(
+        [f"    row{i} = tl.load(x_ptr + offsets + {i}, mask=mask)" for i in range(filter_width)]
     )
-    kernel.src = kernel.src.replace(
-        "    BUBBLESORT_HERE",
-        "\n\n".join(
-            [
-                "\n\n".join(
-                    [
-                        "\n".join(
-                            [
-                                f"    smaller = tl.where(row{j} < row{j + 1}, row{j}, row{j + 1})",
-                                f"    larger = tl.where(row{j} > row{j + 1}, row{j}, row{j + 1})",
-                                f"    row{j} = smaller",
-                                f"    row{j + 1} = larger",
-                            ]
-                        )
-                        for j in range(filter_width - i - 1)
-                    ]
-                )
-                for i in range(filter_width // 2 + 1)
-            ]
-        ),
+    src = src.replace("    LOAD_ALL_ROWS_HERE", load_all_rows)
+
+    bubble_sort = "\n\n".join(
+        [
+            "\n\n".join(
+                [
+                    "\n".join(
+                        [
+                            f"    smaller = tl.where(row{j} < row{j + 1}, row{j}, row{j + 1})",
+                            f"    larger = tl.where(row{j} > row{j + 1}, row{j}, row{j + 1})",
+                            f"    row{j} = smaller",
+                            f"    row{j + 1} = larger",
+                        ]
+                    )
+                    for j in range(filter_width - i - 1)
+                ]
+            )
+            for i in range(filter_width // 2 + 1)
+        ]
     )
-    kernel.src = kernel.src.replace("MIDDLE_ROW_HERE", f"row{filter_width // 2}")
+    src = src.replace("    BUBBLESORT_HERE", bubble_sort)
+    
+    src = src.replace("MIDDLE_ROW_HERE", f"row{filter_width // 2}")
+
+    # Apply updated source
+    kernel._unsafe_update_src(src)
+    kernel._hash = None
 
     return kernel
 
